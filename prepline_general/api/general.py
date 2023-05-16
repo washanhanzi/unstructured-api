@@ -8,7 +8,16 @@ import os
 import gzip
 import mimetypes
 from typing import List, Union
-from fastapi import status, FastAPI, File, Form, Request, UploadFile, APIRouter, HTTPException
+from fastapi import (
+    status,
+    FastAPI,
+    File,
+    Form,
+    Request,
+    UploadFile,
+    APIRouter,
+    HTTPException,
+)
 from fastapi.responses import PlainTextResponse
 import json
 from fastapi.responses import StreamingResponse
@@ -62,6 +71,7 @@ def pipeline_api(
     m_coordinates=[],
     file_content_type=None,
     response_type="application/json",
+    ocr_languages="eng",
 ):
     strategy = (m_strategy[0] if len(m_strategy) else "fast").lower()
     if strategy not in ["fast", "hi_res"]:
@@ -75,7 +85,11 @@ def pipeline_api(
 
     try:
         elements = partition(
-            file=file, file_filename=filename, content_type=file_content_type, strategy=strategy
+            file=file,
+            file_filename=filename,
+            content_type=file_content_type,
+            strategy=strategy,
+            ocr_languages=ocr_languages,
         )
     except ValueError as e:
         if "Invalid file" in e.args[0]:
@@ -84,7 +98,9 @@ def pipeline_api(
             )
         raise e
     except pdfminer.pdfparser.PDFSyntaxError:
-        raise HTTPException(status_code=400, detail=f"{filename} does not appear to be a valid PDF")
+        raise HTTPException(
+            status_code=400, detail=f"{filename} does not appear to be a valid PDF"
+        )
 
     # Due to the above, elements have an ugly temp filename in their metadata
     # For now, replace this with the basename
@@ -156,7 +172,10 @@ class MultipartMixedResponse(StreamingResponse):
 
     def build_part(self, chunk: bytes) -> bytes:
         part = self.boundary + self.CRLF
-        part_headers = {"Content-Length": len(chunk), "Content-Transfer-Encoding": "base64"}
+        part_headers = {
+            "Content-Length": len(chunk),
+            "Content-Transfer-Encoding": "base64",
+        }
         if self.content_type is not None:
             part_headers["Content-Type"] = self.content_type
         part += self._build_part_headers(part_headers)
@@ -176,7 +195,11 @@ class MultipartMixedResponse(StreamingResponse):
                 chunk = chunk.encode(self.charset)
                 chunk = b64encode(chunk)
             await send(
-                {"type": "http.response.body", "body": self.build_part(chunk), "more_body": True}
+                {
+                    "type": "http.response.body",
+                    "body": self.build_part(chunk),
+                    "more_body": True,
+                }
             )
 
         await send({"type": "http.response.body", "body": b"", "more_body": False})
@@ -211,11 +234,14 @@ def pipeline_1(
     output_format: Union[str, None] = Form(default=None),
     strategy: List[str] = Form(default=[]),
     coordinates: List[str] = Form(default=[]),
+    ocr_languages: Union[str, None] = Form(default=None),
 ):
     if files:
         for file_index in range(len(files)):
             if files[file_index].content_type == "application/gzip":
-                files[file_index] = ungz_file(files[file_index], gz_uncompressed_content_type)
+                files[file_index] = ungz_file(
+                    files[file_index], gz_uncompressed_content_type
+                )
 
     content_type = request.headers.get("Accept")
 
@@ -227,7 +253,11 @@ def pipeline_1(
 
     if isinstance(files, list) and len(files):
         if len(files) > 1:
-            if content_type and content_type not in ["*/*", "multipart/mixed", "application/json"]:
+            if content_type and content_type not in [
+                "*/*",
+                "multipart/mixed",
+                "application/json",
+            ]:
                 raise HTTPException(
                     detail=(
                         f"Conflict in media type {content_type}"
@@ -249,6 +279,7 @@ def pipeline_1(
                     response_type=media_type,
                     filename=file.filename,
                     file_content_type=file_content_type,
+                    ocr_languages=ocr_languages,
                 )
 
                 if is_expected_response_type(media_type, type(response)):
@@ -260,7 +291,12 @@ def pipeline_1(
                         status_code=status.HTTP_406_NOT_ACCEPTABLE,
                     )
 
-                valid_response_types = ["application/json", "text/csv", "*/*", "multipart/mixed"]
+                valid_response_types = [
+                    "application/json",
+                    "text/csv",
+                    "*/*",
+                    "multipart/mixed",
+                ]
                 if media_type in valid_response_types:
                     if is_multipart:
                         if type(response) not in [str, bytes]:
